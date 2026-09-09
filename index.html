@@ -396,6 +396,12 @@
 
   .verdict { padding: 14px; }
   .verdict h3 { margin: 0 0 9px; font-size: 13px; letter-spacing: .04em; color: var(--ink-2); }
+  .memo-label {
+    display: block;
+    font-size: 12px;
+    color: var(--ink-2);
+    margin-top: 12px;
+  }
   .memo {
     width: 100%;
     margin-top: 9px;
@@ -548,8 +554,25 @@
     <div class="card verdict" style="margin-top:12px">
       <h3>判定</h3>
       <div class="seg" id="verdict-seg"></div>
-      <textarea class="memo" id="memo" placeholder="聴こえたことをそのまま（例: Bはインストになった／スウェルが多い）"></textarea>
+      <label class="memo-label" id="memo-label" for="memo">所感</label>
+      <textarea class="memo" id="memo" placeholder="聴こえたことをそのまま（例: インストになった／スウェルが多い）"></textarea>
     </div>
+  </section>
+
+  <!-- ============ 記録の書き出し ============ -->
+  <section id="view-rec" hidden>
+    <div class="card loader" style="margin-top:14px">
+      <h2>聴いた結果を返す</h2>
+      <p>判定と所感を md 1枚にまとめます。<strong>iCloud の <code>_ワークスペース › SUNO</code> に保存</strong>すれば、Mac 側からそのまま読み取れます。</p>
+      <button class="btn primary" id="rec-save" style="width:100%;min-height:52px">ファイルに保存（iCloud の SUNO へ）</button>
+      <p style="margin:9px 0 0;font-size:12px">共有シートが開いたら「<strong>“ファイル”に保存</strong>」→ iCloud Drive → _ワークスペース → SUNO。</p>
+      <button class="btn" id="rec-copy" style="width:100%;margin-top:12px">コピーする（Mac に貼る用）</button>
+      <p style="margin:9px 0 0;font-size:12px">同じ Apple ID なら、コピーした直後に Mac 側でそのまま貼り付けられます。</p>
+    </div>
+
+    <div class="section-label">書き出す内容<span class="grow"></span></div>
+    <textarea class="paste-area" id="rec-text" readonly style="min-height:220px"></textarea>
+    <p style="font-size:12px;color:var(--ink-3);margin:8px 2px 0">まだ判定していないセットは入りません。判定は一覧の緑の線で分かります。</p>
   </section>
 </div>
 
@@ -737,8 +760,10 @@
   }
 
   function recOf(set) {
-    if (!state.rec[set.id]) state.rec[set.id] = { verdict: '', memo: '', copied: {} };
-    return state.rec[set.id];
+    var r = state.rec[set.id];
+    if (!r) { r = state.rec[set.id] = { verdict: '', memos: ['', ''], copied: {} }; }
+    if (!r.memos) { r.memos = [r.memo || '', '']; delete r.memo; }
+    return r;
   }
 
   /* ------------------------- 画面 ------------------------- */
@@ -778,6 +803,7 @@
     $('view-load').hidden = view !== 'load';
     $('view-list').hidden = view !== 'list';
     $('view-set').hidden = view !== 'set';
+    $('view-rec').hidden = view !== 'rec';
     $('navbar').hidden = view !== 'set';
     $('btn-export').hidden = !state.sets.length;
     window.scrollTo(0, 0);
@@ -952,7 +978,10 @@
       });
       vs.appendChild(b);
     });
-    $('memo').value = r.memo || '';
+    $('memo').value = r.memos[state.variant] || '';
+    $('memo-label').textContent = set.variants.length > 1
+      ? (v.name || (state.variant === 0 ? 'A' : 'B')) + ' の所感'
+      : '所感';
 
     $('nav-pos').textContent = (state.i + 1) + ' / ' + state.sets.length;
     show('set');
@@ -971,12 +1000,20 @@
     var out = ['# 試聴記録 ' + stamp, ''];
     state.sets.forEach(function (set) {
       var r = state.rec[set.id];
-      if (!r || (!r.verdict && !r.memo)) return;
+      var memos = (r && r.memos) || ['', ''];
+      if (!r || (!r.verdict && !memos[0] && !memos[1])) return;
       var lab = verdictLabels(set).filter(function (x) { return x[0] === r.verdict; })[0];
+      var flat = function (x) { return (x || '').replace(/\s*\n+\s*/g, ' / ').trim() || '(なし)'; };
       out.push('## ' + set.title);
       out.push('- 出典: `' + set.src + '`');
+      if (set.meta && set.meta.settings) out.push('- 条件: ' + set.meta.settings + (set.meta.seed ? ' / seed ' + set.meta.seed : ''));
+      if (set.variants.length > 1) {
+        out.push('- ' + (set.variants[0].name || 'A') + ' の所感: ' + flat(memos[0]));
+        out.push('- ' + (set.variants[1].name || 'B') + ' の所感: ' + flat(memos[1]));
+      } else {
+        out.push('- 所感: ' + flat(memos[0]));
+      }
       out.push('- 判定: ' + (lab ? lab[1] : '(未判定)'));
-      out.push('- 所感: ' + (r.memo || '').replace(/\n+/g, ' / '));
       out.push('');
     });
     if (out.length <= 2) out.push('（判定もメモもまだありません）');
@@ -1031,20 +1068,63 @@
 
   $('btn-files').addEventListener('click', function () { show('load'); });
 
+  function recFileName() {
+    var d = new Date();
+    var p2 = function (n) { return ('0' + n).slice(-2); };
+    return 'listening_' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate())
+      + '_' + p2(d.getHours()) + p2(d.getMinutes()) + '.md';
+  }
+
+  function saveFile(text, name) {
+    var blob = new Blob([text], { type: 'text/markdown' });
+    if (window.File && navigator.canShare) {
+      try {
+        var file = new File([blob], name, { type: 'text/markdown' });
+        if (navigator.canShare({ files: [file] })) {
+          navigator.share({ files: [file] }).then(function () {
+            toast('保存しました');
+          }, function (err) {
+            if (err && err.name === 'AbortError') return;
+            download(blob, name);
+          });
+          return;
+        }
+      } catch (e) { /* 共有できない環境はダウンロードへ */ }
+    }
+    download(blob, name);
+  }
+
+  function download(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    toast('ダウンロードしました');
+  }
+
   $('btn-export').addEventListener('click', function () {
-    var text = exportText();
-    copyText(text, function (ok) {
-      if (ok) { toast('記録をコピーしました'); return; }
-      $('paste').value = text;
-      show('load');
-      toast('下の欄に出しました — 長押しでコピー');
+    $('rec-text').value = exportText();
+    show('rec');
+  });
+
+  $('rec-save').addEventListener('click', function () {
+    saveFile($('rec-text').value, recFileName());
+  });
+
+  $('rec-copy').addEventListener('click', function () {
+    copyText($('rec-text').value, function (ok) {
+      toast(ok ? 'コピーしました' : '下の欄を長押しで選択してください');
+      if (!ok) { $('rec-text').focus(); $('rec-text').select(); }
     });
   });
 
   $('memo').addEventListener('input', function () {
     var set = state.sets[state.i];
     if (!set) return;
-    recOf(set).memo = this.value;
+    recOf(set).memos[state.variant] = this.value;
     save();
   });
 
