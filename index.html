@@ -338,6 +338,10 @@
     font-weight: 700;
     box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
   }
+  /* 歌詞欄の2択(歌詞つき / 構成だけ)。カードの中に置くので少し小さく。 */
+  .seg.lyr { margin: 2px 0 10px; }
+  .seg.lyr button { min-height: 38px; padding: 7px 6px; font-size: 13px; }
+
   .seg.ab button[aria-pressed="true"][data-v="0"] { color: var(--a-hue); }
   .seg.ab button[aria-pressed="true"][data-v="1"] { color: var(--b-hue); }
 
@@ -593,7 +597,7 @@
   var LS_SETS = 'suno_pad_sets_v1';
   var LS_REC = 'suno_pad_records_v1';
 
-  var state = { sets: [], rec: {}, i: 0, variant: 0, sample: false };
+  var state = { sets: [], rec: {}, i: 0, variant: 0, sample: false, lyricsPick: {} };
   var pasteCount = 0;
 
   /* ---------------------------------------------------------------
@@ -692,8 +696,15 @@
             note = lab.rest.replace(/^[-—–]\s*/, '');
           }
         }
-        if (val) cur[kind] = val;
-        else if (note) cur.notes[kind] = note;
+        if (val) {
+          if (kind === 'lyrics') {
+            // 同じ節に歌詞欄が2つ以上あるファイル(③の構成だけ + 歌える言葉に置き換えた版)
+            // は両方持ち、カード側で選べるようにする。cur.lyrics は後勝ち(従来どおり)。
+            cur.lyricsList = cur.lyricsList || [];
+            cur.lyricsList.push({ head: lab.head, text: val });
+          }
+          cur[kind] = val;
+        } else if (note) cur.notes[kind] = note;
         continue;
       }
 
@@ -725,8 +736,8 @@
         src: fileName,
         meta: a[0].meta,
         variants: [
-          { name: a[0].title, style: a[0].style, exclude: a[0].exclude, lyrics: a[0].lyrics, notes: a[0].notes },
-          { name: b[0].title, style: b[0].style, exclude: b[0].exclude, lyrics: b[0].lyrics, notes: b[0].notes }
+          { name: a[0].title, style: a[0].style, exclude: a[0].exclude, lyrics: a[0].lyrics, lyricsList: a[0].lyricsList, notes: a[0].notes },
+          { name: b[0].title, style: b[0].style, exclude: b[0].exclude, lyrics: b[0].lyrics, lyricsList: b[0].lyricsList, notes: b[0].notes }
         ]
       }];
     }
@@ -738,7 +749,7 @@
         sub: sections.length === 1 ? '' : fileTitle,
         src: fileName,
         meta: s.meta,
-        variants: [{ name: '', style: s.style, exclude: s.exclude, lyrics: s.lyrics, notes: s.notes }]
+        variants: [{ name: '', style: s.style, exclude: s.exclude, lyrics: s.lyrics, lyricsList: s.lyricsList, notes: s.notes }]
       };
     });
   }
@@ -919,6 +930,45 @@
     return card;
   }
 
+
+  /* 歌詞欄のカード。ファイルが歌詞欄を2つ持つとき(③の構成だけ / 歌える言葉に置き換えた版)は
+   * 上に2択を出し、**歌える言葉のある方を既定**にする。選択は曲ごとに覚える。
+   * 歌える行 = 角括弧でも空行でもない行。0〜1行なら「構成だけ」、2行以上なら「歌詞つき」。 */
+  function sungLines(text) {
+    return (text || '').split('\n').filter(function (l) {
+      return l.trim() && l.trim().charAt(0) !== '[';
+    }).length;
+  }
+
+  function lyricsCard(v, set) {
+    var list = (v.lyricsList && v.lyricsList.length > 1) ? v.lyricsList : null;
+    if (!list) return fieldCard('歌詞欄', v.lyrics, v.notes && v.notes.lyrics, 'lyrics', set);
+
+    var items = list.map(function (it, n) {
+      return { text: it.text, sung: sungLines(it.text), n: n };
+    });
+    var best = items.slice().sort(function (x, y) { return y.sung - x.sung; })[0];
+    var key = set.id + ':' + state.variant;
+    if (state.lyricsPick[key] === undefined || !items[state.lyricsPick[key]]) state.lyricsPick[key] = best.n;
+    var pick = state.lyricsPick[key];
+
+    var card = fieldCard('歌詞欄', items[pick].text, v.notes && v.notes.lyrics, 'lyrics' + pick, set);
+    var seg = document.createElement('div');
+    seg.className = 'seg lyr';
+    items.forEach(function (it) {
+      var b = document.createElement('button');
+      b.setAttribute('aria-pressed', String(it.n === pick));
+      b.textContent = (it.sung >= 2 ? '歌詞つき' : '構成だけ') + ' · ' + it.sung + '行';
+      b.addEventListener('click', function () {
+        state.lyricsPick[key] = it.n;
+        renderSet();
+      });
+      seg.appendChild(b);
+    });
+    card.insertBefore(seg, card.childNodes[1]);
+    return card;
+  }
+
   function renderSet() {
     var set = state.sets[state.i];
     if (!set) { show('list'); return; }
@@ -962,7 +1012,7 @@
     f.innerHTML = '';
     f.appendChild(fieldCard('Style', v.style, v.notes && v.notes.style, 'style', set));
     f.appendChild(fieldCard('Exclude', v.exclude, v.notes && v.notes.exclude, 'exclude', set));
-    f.appendChild(fieldCard('歌詞欄', v.lyrics, v.notes && v.notes.lyrics, 'lyrics', set));
+    f.appendChild(lyricsCard(v, set));
 
     var r = recOf(set);
     var vs = $('verdict-seg');
