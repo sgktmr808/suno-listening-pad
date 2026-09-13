@@ -495,6 +495,17 @@
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
+
+  .mode-switch { margin-top: 14px; }
+  #author-search { display: block; width: 100%; min-height: 44px; margin-top: 5px; padding: 8px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--ink); font: inherit; }
+  .author-name { min-height: 50px; font-size: 16px; }
+  .author-personality { min-height: 155px; font-size: 16px; line-height: 1.6; }
+  .author-copy { width: 100%; margin-top: 8px; }
+  .author-navigation { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 16px; }
+  .author-navigation .btn { font-size: 12px; }
+  #author-list .filter-help { margin-top: 4px; }
+  #author-count { margin: 12px 2px; }
+
 </style>
 <style>
   html { -webkit-text-size-adjust: 100%; }
@@ -514,6 +525,74 @@
 </div>
 
 <div class="wrap">
+  <div class="seg mode-switch" role="group" aria-label="モード">
+    <button id="mode-listening" aria-pressed="true">試聴</button>
+    <button id="mode-authors" aria-pressed="false">作詞家</button>
+  </div>
+  <section id="view-authors" hidden aria-label="作詞家ペルソナ">
+    <div class="card loader">
+      <h2>作詞家ペルソナ</h2>
+      <p>Sunoの「作詞家を作成」へ、名前と個性をコピーします。言語は作詞する言語です。</p>
+      <button class="btn" id="author-import">作詞家データを読み込む</button>
+      <input type="file" id="author-file" accept=".json,application/json">
+      <p style="margin-top:8px;margin-bottom:0">配布された作詞家JSONを選んでください。一度読み込むと、この端末に保存されます。</p>
+      <p id="author-status" class="import-status" role="status" aria-live="polite" hidden></p>
+    </div>
+    <div id="author-browser" hidden>
+      <div class="card filters">
+        <div class="filter-grid">
+          <label for="author-language">作詞する言語<select id="author-language">
+            <option value="all">すべての言語</option><option value="en">英語</option><option value="ja">日本語</option>
+            <option value="fr">フランス語</option><option value="pt">ポルトガル語</option><option value="es">スペイン語</option>
+            <option value="ko">韓国語</option><option value="multi">多言語</option>
+          </select></label>
+          <label for="author-search">名前・題材を検索<input type="search" id="author-search" placeholder="雨、会話、Harbor…" autocomplete="off"></label>
+        </div>
+        <button class="btn small" id="author-clear-filter" style="margin-top:10px">絞り込みを解除</button>
+        <p class="filter-help">多言語の作詞家は、含まれる各言語でも表示します。</p>
+      </div>
+      <p id="author-count" tabindex="-1" class="filter-help" role="status" aria-live="polite"></p>
+      <div id="author-results">
+        <p class="empty-note" id="author-empty" hidden>条件に合う作詞家がいません。検索語や言語を変えてください。</p>
+        <div class="set-list" id="author-list"></div>
+        <div class="author-navigation">
+          <button class="btn" id="author-page-prev">← 前のページ</button>
+          <span id="author-page" class="filter-help"></span>
+          <button class="btn" id="author-page-next">次のページ →</button>
+        </div>
+      </div>
+      <div id="author-detail" hidden>
+        <button class="btn small" id="author-back">← 作詞家の一覧へ</button>
+        <div class="card set-head">
+          <h2 id="author-title" tabindex="-1"></h2>
+          <p id="author-description" class="filter-help"></p>
+          <div id="author-tags" class="set-tags"></div>
+        </div>
+        <div class="card field" style="margin-top:12px">
+          <label class="field-top" for="author-name-text"><span class="name">名前</span></label>
+          <textarea id="author-name-text" class="paste-area author-name" rows="1" readonly></textarea>
+          <button class="btn primary copy-btn author-copy" id="author-copy-name">名前をコピー</button>
+        </div>
+        <div class="card field">
+          <label class="field-top" for="author-personality-text"><span class="name">個性</span><span class="count" id="author-length"></span></label>
+          <textarea id="author-personality-text" class="paste-area author-personality" readonly></textarea>
+          <button class="btn primary copy-btn author-copy" id="author-copy-personality">個性をコピー</button>
+        </div>
+        <div class="author-navigation">
+          <button class="btn" id="author-prev">← 前の作詞家</button>
+          <span class="filter-help" id="author-position"></span>
+          <button class="btn" id="author-next">次の作詞家 →</button>
+        </div>
+      </div>
+      <details style="margin-top:20px">
+        <summary>作詞家データの管理</summary>
+        <p class="filter-help">試聴セット・判定・メモはそのまま残します。</p>
+        <button class="btn small" id="author-reset" style="margin-top:8px">作詞家データだけリセット</button>
+      </details>
+    </div>
+  </section>
+
+<div id="listening-pane">
   <div id="import-progress" class="card import-progress" hidden>
     <div class="row"><strong id="import-title">MDを読み込み中</strong><span id="import-percent" class="import-percent">0%</span></div>
     <progress id="import-bar" max="100" value="0" aria-labelledby="import-title"></progress>
@@ -619,6 +698,7 @@
   </section>
 </div>
 
+</div>
 <div class="navbar" id="navbar" hidden>
   <div class="navbar-in">
     <button class="btn" id="nav-prev">← 前</button>
@@ -850,13 +930,21 @@
     } else { ng(); }
   }
 
+  var lastListeningView = 'load';
   function show(view) {
+    if (view !== 'authors') lastListeningView = view;
+    $('view-authors').hidden = view !== 'authors';
+    $('listening-pane').hidden = view === 'authors';
+    $('mode-listening').setAttribute('aria-pressed', String(view !== 'authors'));
+    $('mode-authors').setAttribute('aria-pressed', String(view === 'authors'));
+    $('btn-files').hidden = view === 'authors';
+    if (view === 'authors') fitAuthorFields();
     $('view-load').hidden = view !== 'load';
     $('view-list').hidden = view !== 'list';
     $('view-set').hidden = view !== 'set';
     $('view-rec').hidden = view !== 'rec';
     $('navbar').hidden = view !== 'set';
-    $('btn-export').hidden = !state.sets.length;
+    $('btn-export').hidden = view === 'authors' || !state.sets.length;
     $('btn-list').hidden = !state.sets.length;
     window.scrollTo(0, 0);
   }
@@ -1215,6 +1303,7 @@
 
   function setImporting(value) {
     importing = value;
+    $('mode-authors').disabled = value;
     if (!value) $('import-progress').hidden = true;
     ['btn-pick-files', 'btn-pick-folder', 'btn-paste', 'btn-sample'].forEach(function (id) {
       $(id).disabled = value;
@@ -1498,6 +1587,195 @@
     renderList();
     openSet(0);
   });
+
+  /* 作詞家ライブラリは試聴セットと別に保存する。個人用データは同梱しない。 */
+  var LS_AUTHORS = 'suno_pad_authors_v1';
+  var LS_AUTHOR_COPY = 'suno_pad_author_copy_v1';
+  var authorLanguages = { en: '英語', ja: '日本語', fr: 'フランス語', pt: 'ポルトガル語', es: 'スペイン語', ko: '韓国語', multi: '多言語' };
+  var authors = [];
+  var authorCopied = Object.create(null);
+  var authorUI = { language: 'all', query: '', page: 0, selected: null };
+  var authorPageSize = 40;
+  var authorEpoch = 0;
+
+  function authorStatus(message) {
+    $('author-status').textContent = message;
+    $('author-status').hidden = !message;
+  }
+  function authorKey(p) { return p.language + '\n' + p.personality; }
+  function parseAuthorPack(text) {
+    var pack = JSON.parse(text);
+    if (!pack || pack.kind !== 'suno-lyricist-personas' || pack.version !== 1 || !Array.isArray(pack.items) || !pack.items.length || pack.items.length > 10000) {
+      throw new Error('対応する作詞家JSONではありません。配布された作詞家データを選んでください。');
+    }
+    return pack.items.map(function (p, i) {
+      function invalid(reason) { throw new Error((i + 1) + '件目：' + reason); }
+      if (!p || typeof p !== 'object') invalid('データ形式が正しくありません。');
+      if (typeof p.name !== 'string' || !p.name.trim() || p.name.trim().length > 80) invalid('名前は1〜80文字にしてください。');
+      if (typeof p.personality !== 'string' || !p.personality.trim() || p.personality.trim().length > 240) invalid('個性は1〜240文字にしてください。');
+      if (!Object.prototype.hasOwnProperty.call(authorLanguages, p.language)) invalid('作詞言語を確認してください。');
+      if (!Array.isArray(p.languages) || !p.languages.length || p.languages.length > 6 || p.languages.some(function (l) { return l === 'multi' || !Object.prototype.hasOwnProperty.call(authorLanguages, l); })) invalid('使用言語を確認してください。');
+      var languages = Array.from(new Set(p.languages));
+      if (p.language === 'multi' ? languages.length < 2 : languages.length !== 1 || languages[0] !== p.language) invalid('作詞言語と使用言語が一致しません。');
+      if (p.summary !== undefined && (typeof p.summary !== 'string' || p.summary.length > 300)) invalid('説明は300文字以内にしてください。');
+      return { name: p.name.trim(), personality: p.personality.replace(/\r\n?/g, '\n').trim(), language: p.language, languages: languages, summary: p.summary || '' };
+    });
+  }
+  function authorMatches() {
+    var query = authorUI.query.toLocaleLowerCase();
+    return authors.filter(function (p) {
+      var languageOK = authorUI.language === 'all' || (authorUI.language === 'multi' ? p.language === 'multi' : p.languages.indexOf(authorUI.language) >= 0);
+      return languageOK && (!query || (p.name + ' ' + p.summary + ' ' + p.personality).toLocaleLowerCase().indexOf(query) >= 0);
+    });
+  }
+  function importAuthors(text) {
+    var incoming = parseAuthorPack(text);
+    var next = authors.slice();
+    var keys = new Set(next.map(authorKey));
+    var duplicates = 0;
+    incoming.forEach(function (p) {
+      var key = authorKey(p);
+      if (keys.has(key)) { duplicates++; return; }
+      keys.add(key); next.push(p);
+    });
+    if (next.length > 10000) throw new Error('作詞家データは合計10,000件までです。');
+    // 保存に成功してから表示を更新する。容量不足では既存ライブラリを保持する。
+    try { localStorage.setItem(LS_AUTHORS, JSON.stringify({ kind: 'suno-lyricist-personas', version: 1, items: next })); }
+    catch (e) { throw new Error('端末に保存できませんでした。空き容量やブラウザの保存設定を確認してください。既存データは保持しています。'); }
+    authors = next;
+    authorUI = { language: 'all', query: '', page: 0, selected: null };
+    $('author-language').value = 'all'; $('author-search').value = '';
+    renderAuthors();
+    authorStatus((incoming.length - duplicates) + '件追加・重複' + duplicates + '件をスキップ。合計' + authors.length + '件を保存しました。');
+  }
+  function renderAuthors() {
+    $('author-browser').hidden = !authors.length;
+    var matches = authorMatches();
+    $('author-count').textContent = matches.length + ' / ' + authors.length + ' 人';
+    var selected = matches.find(function (p) { return authorKey(p) === authorUI.selected; });
+    if (!selected) authorUI.selected = null;
+    $('author-results').hidden = !!selected;
+    $('author-detail').hidden = !selected;
+    if (selected) {
+      $('author-title').textContent = selected.name;
+      $('author-description').textContent = selected.summary;
+      $('author-tags').innerHTML = '';
+      selected.languages.forEach(function (l) {
+        var tag = document.createElement('span'); tag.className = 'pill'; tag.textContent = authorLanguages[l]; $('author-tags').appendChild(tag);
+      });
+      $('author-name-text').value = selected.name;
+      $('author-personality-text').value = selected.personality;
+      $('author-length').textContent = selected.personality.length + ' / 240文字';
+      fitAuthorFields();
+      ['name', 'personality'].forEach(function (field) {
+        var copied = authorCopied[authorKey(selected) + ':' + field] === true;
+        var b = $('author-copy-' + field);
+        b.setAttribute('data-copied', copied ? '1' : '0');
+        b.textContent = (field === 'name' ? '名前' : '個性') + (copied ? '：コピー済み・もう一度' : 'をコピー');
+      });
+      var pos = matches.indexOf(selected);
+      $('author-position').textContent = (pos + 1) + ' / ' + matches.length;
+      $('author-prev').disabled = pos <= 0; $('author-next').disabled = pos >= matches.length - 1;
+      return;
+    }
+    var pages = Math.max(1, Math.ceil(matches.length / authorPageSize));
+    authorUI.page = Math.min(authorUI.page, pages - 1);
+    $('author-list').innerHTML = '';
+    matches.slice(authorUI.page * authorPageSize, (authorUI.page + 1) * authorPageSize).forEach(function (p) {
+      var button = document.createElement('button'); button.className = 'set-item';
+      var left = document.createElement('div');
+      var title = document.createElement('div'); title.className = 't'; title.textContent = p.name;
+      var summary = document.createElement('div'); summary.className = 'filter-help'; summary.textContent = p.summary;
+      var tag = document.createElement('span'); tag.className = 'pill'; tag.textContent = authorLanguages[p.language];
+      left.appendChild(title); left.appendChild(summary); button.appendChild(left); button.appendChild(tag);
+      button.addEventListener('click', function () { openAuthor(p); });
+      $('author-list').appendChild(button);
+    });
+    $('author-empty').hidden = !!matches.length;
+    $('author-page').textContent = (authorUI.page + 1) + ' / ' + pages;
+    $('author-page-prev').disabled = authorUI.page === 0;
+    $('author-page-next').disabled = authorUI.page >= pages - 1;
+  }
+  function fitAuthorFields() {
+    if ($('view-authors').hidden || $('author-detail').hidden) return;
+    ['author-name-text', 'author-personality-text'].forEach(function (id) {
+      var box = $(id); box.style.height = 'auto'; box.style.height = (box.scrollHeight + 2) + 'px';
+    });
+  }
+  if (window.addEventListener) window.addEventListener('resize', fitAuthorFields);
+  function openAuthor(p) {
+    authorUI.selected = authorKey(p); renderAuthors();
+    $('author-title').focus();
+  }
+  function copyAuthor(field) {
+    var p = authors.find(function (p) { return authorKey(p) === authorUI.selected; });
+    if (!p) return;
+    copyText(p[field], function (ok) {
+      if (!ok) {
+        var box = $(field === 'name' ? 'author-name-text' : 'author-personality-text');
+        box.focus(); box.select(); box.setSelectionRange(0, box.value.length);
+        toast('自動コピーできませんでした。選択された本文をコピーしてください。');
+        return;
+      }
+      authorCopied[authorKey(p) + ':' + field] = true;
+      try { localStorage.setItem(LS_AUTHOR_COPY, JSON.stringify(authorCopied)); } catch (e) { /* コピー自体は成功。印はこの画面の間保持。 */ }
+      renderAuthors(); toast((field === 'name' ? '名前' : '個性') + 'をコピーしました');
+    });
+  }
+  $('mode-authors').addEventListener('click', function () { renderAuthors(); show('authors'); });
+  $('mode-listening').addEventListener('click', function () { show(lastListeningView); });
+  $('author-import').addEventListener('click', function () { $('author-file').click(); });
+  $('author-file').addEventListener('change', async function (ev) {
+    var file = ev.target.files && ev.target.files[0]; ev.target.value = '';
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) { authorStatus('作詞家JSONは4MB以下のファイルを選んでください。'); return; }
+    var epoch = ++authorEpoch;
+    $('author-import').disabled = true; authorStatus('作詞家データを読み込み中…');
+    try {
+      var text = await readFile(file, function () {});
+      if (epoch !== authorEpoch) return;
+      importAuthors(text);
+    } catch (e) {
+      if (epoch === authorEpoch) authorStatus(e instanceof SyntaxError ? 'JSONを読めませんでした。作詞家データのファイルを選んでください。' : (e.message || '読み込みに失敗しました。'));
+    } finally { if (epoch === authorEpoch) $('author-import').disabled = false; }
+  });
+  function filterAuthors() { authorUI.language = $('author-language').value; authorUI.query = $('author-search').value.trim(); authorUI.page = 0; authorUI.selected = null; renderAuthors(); }
+  $('author-language').addEventListener('change', filterAuthors);
+  $('author-search').addEventListener('input', filterAuthors);
+  $('author-clear-filter').addEventListener('click', function () { $('author-language').value = 'all'; $('author-search').value = ''; filterAuthors(); });
+  $('author-page-prev').addEventListener('click', function () { authorUI.page = Math.max(0, authorUI.page - 1); renderAuthors(); $('author-count').focus(); });
+  $('author-page-next').addEventListener('click', function () { authorUI.page++; renderAuthors(); $('author-count').focus(); });
+  $('author-back').addEventListener('click', function () {
+    var pos = authorMatches().findIndex(function (p) { return authorKey(p) === authorUI.selected; });
+    authorUI.page = Math.floor(Math.max(0, pos) / authorPageSize); authorUI.selected = null; renderAuthors(); $('author-count').focus();
+  });
+  ['prev', 'next'].forEach(function (direction) {
+    $('author-' + direction).addEventListener('click', function () {
+      var list = authorMatches(); var pos = list.findIndex(function (p) { return authorKey(p) === authorUI.selected; });
+      var target = list[pos + (direction === 'next' ? 1 : -1)]; if (target) openAuthor(target);
+    });
+  });
+  $('author-copy-name').addEventListener('click', function () { copyAuthor('name'); });
+  $('author-copy-personality').addEventListener('click', function () { copyAuthor('personality'); });
+  $('author-reset').addEventListener('click', function () {
+    if (!window.confirm('この端末の作詞家データとコピー済みの印を削除します。試聴セット・判定・メモと元のファイルは残ります。リセットしますか？')) return;
+    try { localStorage.removeItem(LS_AUTHORS); } catch (e) { authorStatus('保存データを削除できませんでした。'); return; }
+    try { localStorage.removeItem(LS_AUTHOR_COPY); } catch (e) { /* ライブラリの削除は完了。 */ }
+    authorEpoch++; $('author-import').disabled = false;
+    authors = []; authorCopied = Object.create(null); authorUI = { language: 'all', query: '', page: 0, selected: null };
+    $('author-name-text').value = ''; $('author-personality-text').value = '';
+    $('author-language').value = 'all'; $('author-search').value = '';
+    renderAuthors(); authorStatus('作詞家データをリセットしました。');
+  });
+  try {
+    var savedAuthors = localStorage.getItem(LS_AUTHORS);
+    if (savedAuthors) authors = parseAuthorPack(savedAuthors);
+  } catch (e) { authorStatus('保存済みの作詞家データを読み込めません。元のJSONを選び直してください。'); }
+  try {
+    var copiedAuthors = JSON.parse(localStorage.getItem(LS_AUTHOR_COPY) || '{}');
+    if (copiedAuthors && typeof copiedAuthors === 'object' && !Array.isArray(copiedAuthors)) authorCopied = copiedAuthors;
+  } catch (e) { /* コピー済み表示は初期状態に戻す。 */ }
+
 
   /* ------------------------- 起動 ------------------------- */
   load();
