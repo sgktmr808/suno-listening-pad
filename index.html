@@ -528,7 +528,7 @@
       <input type="file" id="file-input" accept=".md,.markdown,text/markdown" multiple>
       <button class="file-btn btn" id="btn-pick-folder" style="margin-top:8px">フォルダごと読み込む</button>
       <input type="file" id="folder-input" webkitdirectory multiple>
-      <p id="folder-help" style="margin-top:8px">サブフォルダを含む .md / .markdown から、Style・Exclude・歌詞欄のいずれかがあるファイルを追加します。</p>
+      <p id="folder-help" style="margin-top:8px">サブフォルダを含む .md / .markdown から、Style・Exclude・歌詞欄のいずれかがあるファイルを追加します。読み込み済みと内容・生成条件が同じセットは追加しません。</p>
       <div class="row" style="flex-wrap:wrap;margin-top:12px">
         <button class="btn small" id="btn-list" hidden>読み込み済みの一覧へ</button>
         <button class="btn small" id="btn-reset">読み込みデータをリセット</button>
@@ -1117,17 +1117,42 @@
     });
   }
 
+  // 出典・タイトルは比較せず、コピーする内容と生成条件で重複を判定する。
+  // 保存済みのセットにも適用できるよう、読み込み時に既存データから計算する。
+  function contentKey(set) {
+    function text(value) { return String(value || '').replace(/\r\n?/g, '\n').trim(); }
+    var meta = set.meta || {};
+    return JSON.stringify([
+      text(meta.settings), text(meta.seed), text(meta.hash),
+      set.variants.map(function (v) {
+        var notes = v.notes || {};
+        return [text(v.style), text(v.exclude), text(v.lyrics),
+          (v.lyricsList || []).map(function (item) { return text(item.text); }),
+          text(notes.style), text(notes.exclude), text(notes.lyrics)];
+      })
+    ]);
+  }
+
   function addSets(newSets, label) {
     if (!importing) $('import-progress').hidden = true;
     if (!newSets.length) { importStatus(label + ': 使用できる3欄が見つかりません'); return ''; }
     // サンプル閲覧中は保存してある実データに追加する。
     if (state.sample) { state.sets = []; state.rec = {}; load(); state.sample = false; }
     var ids = Object.create(null);
-    state.sets.forEach(function (s, i) { ids[s.id] = i; });
+    var contents = new Map();
+    function countContent(key, delta) {
+      var count = (contents.get(key) || 0) + delta;
+      if (count) contents.set(key, count); else contents.delete(key);
+    }
+    state.sets.forEach(function (s, i) { ids[s.id] = i; countContent(contentKey(s), 1); });
     var added = 0;
     var updated = 0;
+    var duplicates = 0;
     newSets.forEach(function (s) {
+      var key = contentKey(s);
+      if (contents.has(key)) { duplicates++; return; }
       if (ids[s.id] !== undefined) {
+        countContent(contentKey(state.sets[ids[s.id]]), -1);
         state.sets[ids[s.id]] = s;
         updated++;
       } else {
@@ -1135,11 +1160,12 @@
         state.sets.push(s);
         added++;
       }
+      countContent(key, 1);
     });
     save();
     renderList();
     show('list');
-    var message = added + ' セット追加・' + updated + ' セット更新';
+    var message = added + ' セット追加・' + updated + ' セット更新・重複 ' + duplicates + ' セットをスキップ';
     importStatus(message);
     return message;
   }
