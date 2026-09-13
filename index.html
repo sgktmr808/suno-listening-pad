@@ -1032,9 +1032,9 @@
 
     var f = $('fields');
     f.innerHTML = '';
+    f.appendChild(lyricsCard(v, set));
     f.appendChild(fieldCard('Style', v.style, v.notes && v.notes.style, 'style', set));
     f.appendChild(fieldCard('Exclude', v.exclude, v.notes && v.notes.exclude, 'exclude', set));
-    f.appendChild(lyricsCard(v, set));
 
     var r = recOf(set);
     var vs = $('verdict-seg');
