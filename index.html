@@ -592,6 +592,16 @@
           <textarea id="author-reference-text" class="paste-area" rows="8" readonly></textarea>
           <button class="btn primary copy-btn author-copy" id="author-copy-reference">参照歌詞をコピー</button>
         </div>
+        <div class="card field" id="author-reference2-card" hidden>
+          <label class="field-top" for="author-reference2-text"><span class="name">参照歌詞2</span></label>
+          <textarea id="author-reference2-text" class="paste-area" rows="8" readonly></textarea>
+          <button class="btn primary copy-btn author-copy" id="author-copy-reference2">参照歌詞2をコピー</button>
+        </div>
+        <div class="card field" id="author-reference3-card" hidden>
+          <label class="field-top" for="author-reference3-text"><span class="name">参照歌詞3</span></label>
+          <textarea id="author-reference3-text" class="paste-area" rows="8" readonly></textarea>
+          <button class="btn primary copy-btn author-copy" id="author-copy-reference3">参照歌詞3をコピー</button>
+        </div>
         <div class="author-navigation">
           <button class="btn" id="author-prev">← 前の作詞家</button>
           <span class="filter-help" id="author-position"></span>
@@ -1641,10 +1651,14 @@
       if (p.language === 'multi' ? languages.length < 2 : languages.length !== 1 || languages[0] !== p.language) invalid('作詞言語と使用言語が一致しません。');
       if (p.summary !== undefined && (typeof p.summary !== 'string' || p.summary.length > 300)) invalid('説明は300文字以内にしてください。');
       if (p.id !== undefined && p.id !== '' && (typeof p.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(p.id))) invalid('IDが正しくありません。');
-      ['reference', 'previousPersonality', 'previousName'].forEach(function (key) {
-        if (p[key] !== undefined && (typeof p[key] !== 'string' || p[key].length > (key === 'reference' ? 20000 : 300))) invalid('参照歌詞・移行データが長すぎます。');
+      ['reference', 'reference2', 'reference3', 'previousPersonality', 'previousName'].forEach(function (key) {
+        if (p[key] !== undefined && (typeof p[key] !== 'string' || p[key].length > (/^reference/.test(key) ? 20000 : 300))) invalid('参照歌詞・移行データが長すぎます。');
       });
-      return { id: p.id || '', reference: p.reference || '', previousPersonality: p.previousPersonality || '', previousName: p.previousName || '', name: p.name.trim(), personality: p.personality.replace(/\r\n?/g, '\n').trim(), language: p.language, languages: languages, summary: p.summary || '' };
+      // 改訂版(DNA版)は同じ書き方・違う題材の参照歌詞を3本持つ。先頭は reference と同じ本文。
+      if (p.references !== undefined && (!Array.isArray(p.references) || p.references.length > 3 || p.references.some(function (r) { return typeof r !== 'string' || r.length > 20000; }))) invalid('参照歌詞は3本まで・各20,000文字以内にしてください。');
+      // 端末に保存した形(reference2/reference3)からの読み戻しも同じ経路を通る。
+      var refs = Array.isArray(p.references) ? p.references : [p.reference || '', p.reference2 || '', p.reference3 || ''];
+      return { id: p.id || '', reference: p.reference || refs[0] || '', reference2: refs[1] || '', reference3: refs[2] || '', previousPersonality: p.previousPersonality || '', previousName: p.previousName || '', name: p.name.trim(), personality: p.personality.replace(/\r\n?/g, '\n').trim(), language: p.language, languages: languages, summary: p.summary || '' };
     });
   }
   function authorMatches() {
@@ -1696,15 +1710,19 @@
       $('author-name-text').value = selected.name;
       $('author-personality-text').value = selected.personality;
       $('author-reference-text').value = selected.reference;
-      $('author-reference-help').textContent = selected.reference ? '作風を示すオリジナルの短い例。「参照歌詞を追加」で使用し、必要に応じて編集してください。' : 'この旧データには参照歌詞がありません。改訂版を読み込むか、ご自身の歌詞をSunoで追加してください。';
+      $('author-reference-help').textContent = selected.reference2 ? '同じ書き方で題材だけ違う3本の作例。「参照歌詞を追加」で使用し、曲の題材は歌詞作成時に別途指定してください。' : selected.reference ? '作風を示すオリジナルの短い例。「参照歌詞を追加」で使用し、必要に応じて編集してください。' : 'この旧データには参照歌詞がありません。改訂版を読み込むか、ご自身の歌詞をSunoで追加してください。';
       $('author-copy-reference').disabled = !selected.reference;
+      ['reference2', 'reference3'].forEach(function (field) {
+        $('author-' + field + '-card').hidden = !selected[field];
+        $('author-' + field + '-text').value = selected[field] || '';
+      });
       $('author-length').textContent = selected.personality.length + ' / 240文字';
       fitAuthorFields();
-      ['name', 'personality', 'reference'].forEach(function (field) {
+      ['name', 'personality', 'reference', 'reference2', 'reference3'].forEach(function (field) {
         var copied = authorCopied[authorKey(selected) + ':' + field] === true;
         var b = $('author-copy-' + field);
         b.setAttribute('data-copied', copied ? '1' : '0');
-        b.textContent = ({ name: '名前', personality: '個性', reference: '参照歌詞' }[field]) + (copied ? '：コピー済み・もう一度' : 'をコピー');
+        b.textContent = authorFieldLabel[field] + (copied ? '：コピー済み・もう一度' : 'をコピー');
       });
       var pos = matches.indexOf(selected);
       $('author-position').textContent = (pos + 1) + ' / ' + matches.length;
@@ -1729,9 +1747,10 @@
     $('author-page-prev').disabled = authorUI.page === 0;
     $('author-page-next').disabled = authorUI.page >= pages - 1;
   }
+  var authorFieldLabel = { name: '名前', personality: '個性', reference: '参照歌詞', reference2: '参照歌詞2', reference3: '参照歌詞3' };
   function fitAuthorFields() {
     if ($('view-authors').hidden || $('author-detail').hidden) return;
-    ['author-name-text', 'author-personality-text', 'author-reference-text'].forEach(function (id) {
+    ['author-name-text', 'author-personality-text', 'author-reference-text', 'author-reference2-text', 'author-reference3-text'].forEach(function (id) {
       var box = $(id); box.style.height = 'auto'; box.style.height = (box.scrollHeight + 2) + 'px';
     });
   }
@@ -1752,7 +1771,7 @@
       }
       authorCopied[authorKey(p) + ':' + field] = true;
       try { localStorage.setItem(LS_AUTHOR_COPY, JSON.stringify(authorCopied)); } catch (e) { /* コピー自体は成功。印はこの画面の間保持。 */ }
-      renderAuthors(); toast(({ name: '名前', personality: '個性', reference: '参照歌詞' }[field]) + 'をコピーしました');
+      renderAuthors(); toast(authorFieldLabel[field] + 'をコピーしました');
     });
   }
   $('mode-authors').addEventListener('click', function () { renderAuthors(); show('authors'); });
@@ -1776,7 +1795,7 @@
     var lang = text.match(/^- 作詞言語: (.+)$/m);
     var languages = lang ? lang[1].split(' / ').map(function (label) { return Object.keys(authorLanguages).find(function (key) { return authorLanguages[key] === label.trim(); }); }) : [];
     var id = text.match(/^# (LP[0-9]+) — /m);
-    return parseAuthorPack(JSON.stringify({kind:'suno-lyricist-personas', version:1, items:[{id:id ? id[1] : undefined,name:name,personality:personality,reference:field('参照歌詞'),language:languages.length > 1 ? 'multi' : languages[0],languages:languages}]}));
+    return parseAuthorPack(JSON.stringify({kind:'suno-lyricist-personas', version:1, items:[{id:id ? id[1] : undefined,name:name,personality:personality,reference:field('参照歌詞'),references:[field('参照歌詞'), field('参照歌詞2'), field('参照歌詞3')].filter(Boolean),language:languages.length > 1 ? 'multi' : languages[0],languages:languages}]}));
   }
   async function importAuthorFiles(ev) {
     var files = Array.prototype.slice.call(ev.target.files || []).filter(function (f) { return /\.(json|md|markdown)$/i.test(f.name); });
@@ -1833,6 +1852,8 @@
     });
   });
   $('author-copy-reference').addEventListener('click', function () { copyAuthor('reference'); });
+  $('author-copy-reference2').addEventListener('click', function () { copyAuthor('reference2'); });
+  $('author-copy-reference3').addEventListener('click', function () { copyAuthor('reference3'); });
   $('author-copy-name').addEventListener('click', function () { copyAuthor('name'); });
   $('author-copy-personality').addEventListener('click', function () { copyAuthor('personality'); });
   $('author-reset').addEventListener('click', function () {
@@ -1842,6 +1863,7 @@
     authorEpoch++; $('author-import').disabled = false; $('author-folder-import').disabled = false; $('author-progress').hidden = true;
     authors = []; authorCopied = Object.create(null); authorUI = { language: 'all', query: '', page: 0, selected: null };
     $('author-name-text').value = ''; $('author-personality-text').value = ''; $('author-reference-text').value = '';
+    $('author-reference2-text').value = ''; $('author-reference3-text').value = '';
     $('author-language').value = 'all'; $('author-search').value = '';
     renderAuthors(); authorStatus('作詞家データをリセットしました。');
   });
