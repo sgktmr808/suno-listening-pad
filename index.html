@@ -676,7 +676,8 @@
           <option value="all">すべて</option><option value="instrumental">インスト</option><option value="vocal">歌もの</option><option value="unknown">未分類</option>
         </select></label>
       </div>
-      <p class="filter-help">Style・歌詞から自動分類します。複合ジャンルは各ジャンルに表示し、A/Bは条件に合う側があるセットを表示します。</p>
+      <label for="filter-text" style="display:block;margin-top:10px;font-size:13px;color:var(--ink-2)">ジャンル名・題名・本文を検索<input type="search" id="filter-text" placeholder="シティポップ、city pop、falsetto…" autocomplete="off" style="display:block;width:100%;min-height:44px;margin-top:5px;padding:8px;border:1px solid var(--line-strong);border-radius:9px;background:var(--surface);color:var(--ink);font:inherit"></label>
+      <p class="filter-help">ジャンルを名乗っている試聴mdは、そのジャンルで確実に絞り込みます(「(ジャンル指定)」)。名乗っていない古いmdだけ Style 本文から推測します(「(本文から推測)」)。検索は全角/半角・ひらがな/カタカナ・大文字小文字を区別せず、空白で区切ると全部含むものを探します。</p>
       <button class="btn small" id="btn-clear-filters" style="margin-top:10px">絞り込みを解除</button>
     </div>
     <div class="section-label" id="list-label">セット<span class="grow"></span></div>
@@ -691,6 +692,7 @@
       <h2 id="set-title"></h2>
       <div class="src" id="set-src"></div>
       <div class="meta" id="set-meta"></div>
+      <div id="genre-note"></div>
     </div>
 
     <div id="variant-wrap" style="margin-top:12px"></div>
@@ -742,7 +744,7 @@
 
   var state = { sets: [], rec: {}, i: 0, variant: 0, sample: false, lyricsPick: {} };
   var pasteCount = 0;
-  var filters = { genre: 'all', vocal: 'all' };
+  var filters = { genre: 'all', vocal: 'all', query: '' };
 
   /* ---------------------------------------------------------------
    * md パーサ — 3欄(Style / Exclude / Lyrics)を拾う。
@@ -815,6 +817,12 @@
       if ((m = t.match(/^`?styleHash`?[:：]\s*`?(\d+)`?/))) {
         if (cur && !skipping) cur.meta.hash = m[1]; else fileMeta.hash = m[1];
       }
+      // 試聴mdの「- 出典: genre `city_pop`(シティポップ) — …」からジャンルidを拾う。
+      // これがあると Style 本文の語からジャンルを推測せずに済む(推測は誤りが多い)。
+      if ((m = t.match(/出典[:：].*?genre\s*[`\u2018\u2019'"]([a-z0-9_]+)[`\u2018\u2019'"]/i))) {
+        if (cur && !skipping) { if (!cur.meta.genreId) cur.meta.genreId = m[1]; }
+        else if (!fileMeta.genreId) fileMeta.genreId = m[1];
+      }
       if ((m = t.match(/^-?\s*seed[:：]\s*(.+)$/i))) {
         var sd = m[1].replace(/\*\*/g, '').trim();
         if (cur && !skipping) { if (!cur.meta.seed) cur.meta.seed = sd; } else if (!fileMeta.seed) fileMeta.seed = sd;
@@ -867,6 +875,7 @@
       s.meta.settings = s.meta.settings || fileMeta.settings;
       s.meta.hash = s.meta.hash || fileMeta.hash;
       s.meta.seed = s.meta.seed || fileMeta.seed;
+      s.meta.genreId = s.meta.genreId || fileMeta.genreId;
     });
 
     // A/B ペアなら 1セット2バリアントに畳む
@@ -1005,7 +1014,41 @@
   ];
   var VOCAL_LABELS = { instrumental: 'インスト', vocal: '歌もの', unknown: '未分類' };
 
-  function variantCategory(v) {
+  // ジャンル解説は**ページに埋め込まず外部データ**にする(index.html と同じ場所の genres.json)。
+  // 無ければ解説を出さないだけで、それ以外は従来どおり動く。
+  var genreNotes = null;
+  function genreNoteOf(set) {
+    var id = set && set.meta && set.meta.genreId;
+    return (id && genreNotes && genreNotes.genres && genreNotes.genres[id]) ? genreNotes.genres[id] : null;
+  }
+  function familyJa(id) {
+    var f = genreNotes && (genreNotes.families || []).filter(function (x) { return x.id === id; })[0];
+    return f ? f.ja : id;
+  }
+  function loadGenreNotes() {
+    if (typeof fetch !== 'function') return;
+    fetch('genres.json', { cache: 'no-cache' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (json) {
+        if (!json || json.kind !== 'suno-genre-notes' || !json.genres) return;
+        genreNotes = json;
+        if (state.sets.length) renderList();
+      })
+      .catch(function () { /* 置いていないときは解説なしで動く */ });
+  }
+
+  // set を渡せるときは、そのセットが名乗っているジャンルidを優先する。
+  // 名乗っていない古い md だけ、従来どおり Style 本文の語から推測する。
+  function variantCategory(v, set) {
+    var note = genreNoteOf(set);
+    if (note) {
+      var base = variantCategoryByText(v);
+      return { genres: ['fam:' + note.family], vocal: base.vocal };
+    }
+    return variantCategoryByText(v);
+  }
+
+  function variantCategoryByText(v) {
     // Exclude は避けたい要素なので、分類の材料に使わない。
     var style = (v.style || '').replace(/\b(?:no|without|avoid|exclude)\s+[a-z& -]+(?=[,;\n.]|$)/gi, ' ');
     var genres = GENRES.filter(function (g) { return g[2].test(style); }).map(function (g) { return g[0]; });
@@ -1020,8 +1063,16 @@
       (vocal || sung ? 'vocal' : (instrumentalLyrics ? 'instrumental' : 'unknown')) };
   }
 
+  function setSearchText(set) {
+    var note = genreNoteOf(set);
+    return [set.title, set.src, set.sub, note ? note.ja : '', note ? note.en : '',
+      set.meta && set.meta.genreId, note ? familyJa(note.family) : '',
+      set.variants.map(function (v) { return v.style || ''; }).join(' ')].filter(Boolean).join(' ');
+  }
+
   function matchingVariants(set) {
-    return set.variants.map(function (v, i) { return { i: i, category: variantCategory(v) }; })
+    if (filters.query && !matchesAllTerms(setSearchText(set), filters.query)) return [];
+    return set.variants.map(function (v, i) { return { i: i, category: variantCategory(v, set) }; })
       .filter(function (x) {
         return (filters.genre === 'all' || x.category.genres.indexOf(filters.genre) >= 0) &&
           (filters.vocal === 'all' || x.category.vocal === filters.vocal);
@@ -1036,11 +1087,13 @@
   function renderFilterOptions() {
     var available = new Set();
     state.sets.forEach(function (set) { set.variants.forEach(function (v) {
-      variantCategory(v).genres.forEach(function (g) { available.add(g); });
+      variantCategory(v, set).genres.forEach(function (g) { available.add(g); });
     }); });
     var select = $('filter-genre');
     select.innerHTML = '';
-    [['all', 'すべてのジャンル']].concat(GENRES.map(function (g) { return [g[0], g[1]]; }), [['unknown', '未分類']])
+    var fams = (genreNotes && genreNotes.families ? genreNotes.families : [])
+      .map(function (f) { return ['fam:' + f.id, f.ja + '(ジャンル指定)']; });
+    [['all', 'すべてのジャンル']].concat(fams, GENRES.map(function (g) { return [g[0], g[1] + '(本文から推測)']; }), [['unknown', '未分類']])
       .forEach(function (g) {
         if (g[0] !== 'all' && !available.has(g[0]) && filters.genre !== g[0]) return;
         var option = document.createElement('option'); option.value = g[0]; option.textContent = g[1]; select.appendChild(option);
@@ -1070,12 +1123,14 @@
       s.className = 's';
       s.textContent = (set.sub ? set.sub + ' · ' : '') + set.src;
       left.appendChild(t); left.appendChild(s);
-      var categories = set.variants.map(variantCategory);
+      var categories = set.variants.map(function (v) { return variantCategory(v, set); });
+      var noteForCard = genreNoteOf(set);
       var tags = document.createElement('div'); tags.className = 'set-tags';
       var genreIds = new Set(); var types = new Set();
       categories.forEach(function (c) { c.genres.forEach(function (g) { genreIds.add(g); }); types.add(c.vocal); });
       var labels = GENRES.filter(function (g) { return genreIds.has(g[0]); }).map(function (g) { return g[1]; });
-      if (genreIds.has('unknown')) labels.push('ジャンル未分類');
+      if (noteForCard) labels = [noteForCard.ja, familyJa(noteForCard.family)];
+      if (!noteForCard && genreIds.has('unknown')) labels.push('ジャンル未分類');
       types.forEach(function (type) { labels.push(VOCAL_LABELS[type]); });
       labels.forEach(function (label) { var tag = document.createElement('span'); tag.className = 'pill'; tag.textContent = label; tags.appendChild(tag); });
       left.appendChild(tags);
@@ -1170,6 +1225,22 @@
   /* 歌詞欄のカード。ファイルが歌詞欄を2つ持つとき(③の構成だけ / 歌える言葉に置き換えた版)は
    * 上に2択を出し、**歌える言葉のある方を既定**にする。選択は曲ごとに覚える。
    * 歌える行 = 角括弧でも空行でもない行。0〜1行なら「構成だけ」、2行以上なら「歌詞つき」。 */
+  // 検索語の正規化。全角/半角(NFKC)・大文字小文字・カタカナ→ひらがな を畳む。
+  // 畳まないと「Ｒｏｗａｎ」「テガミ」「ﾃｶﾞﾐ」がどれも0件になる(実測)。
+  function normalizeForSearch(value) {
+    var t = String(value == null ? '' : value);
+    if (t.normalize) t = t.normalize('NFKC');
+    t = t.toLocaleLowerCase();
+    return t.replace(/[\u30a1-\u30f6]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0x60); });
+  }
+  // 空白区切りの語を**全部**含むか。1語しか見ないと「所有 撤回」が0件になる(実測)。
+  function matchesAllTerms(haystack, query) {
+    var terms = normalizeForSearch(query).split(/[\s\u3000]+/).filter(Boolean);
+    if (!terms.length) return true;
+    var h = normalizeForSearch(haystack);
+    return terms.every(function (term) { return h.indexOf(term) >= 0; });
+  }
+
   function sungLines(text) {
     return (text || '').split('\n').filter(function (l) {
       return l.trim() && l.trim().charAt(0) !== '[';
@@ -1205,6 +1276,95 @@
     return card;
   }
 
+  // ジャンル解説(外部データ genres.json)。無ければ何も出さない。
+  function renderGenreNote(set) {
+    var host = $('genre-note');
+    host.innerHTML = '';
+    var note = genreNoteOf(set);
+    if (!note) return;
+    var box = document.createElement('details');
+    box.style.marginTop = '10px';
+    var head = document.createElement('summary');
+    head.style.cursor = 'pointer';
+    head.textContent = note.ja + '(' + note.en + ')— ' + familyJa(note.family) + ' のジャンル解説';
+    box.appendChild(head);
+
+    function para(text, cls) {
+      if (!text) return;
+      var p = document.createElement('p');
+      p.className = cls || 'filter-help';
+      p.style.marginTop = '8px';
+      p.textContent = text;
+      box.appendChild(p);
+    }
+    function label(text) {
+      var d = document.createElement('div');
+      d.className = 'section-label';
+      d.style.marginTop = '12px';
+      d.textContent = text;
+      box.appendChild(d);
+    }
+    para(note.summary);
+    label('成り立ち'); para(note.history);
+    label('どんな場の音楽だったか'); para(note.scene);
+    if (note.artists && note.artists.length) {
+      label('代表的なアーティスト');
+      var ul = document.createElement('ul');
+      ul.style.margin = '8px 0 0 1.1em';
+      ul.style.padding = '0';
+      note.artists.forEach(function (a) {
+        var li = document.createElement('li');
+        li.className = 'filter-help';
+        li.appendChild(document.createTextNode(a.name + (a.note ? ' — ' + a.note : '') + ' '));
+        li.appendChild(sourceLink(a.source));
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    }
+    if (note.tracks && note.tracks.length) {
+      label('代表的な楽曲');
+      var ol = document.createElement('ul');
+      ol.style.margin = '8px 0 0 1.1em';
+      ol.style.padding = '0';
+      note.tracks.forEach(function (t) {
+        var li = document.createElement('li');
+        li.className = 'filter-help';
+        li.appendChild(document.createTextNode(
+          '「' + t.title + '」' + (t.artist ? ' / ' + t.artist : '') + (t.year ? '(' + t.year + ')' : '') + ' '));
+        li.appendChild(sourceLink(t.source));
+        ol.appendChild(li);
+      });
+      box.appendChild(ol);
+    }
+    if (note.gaps) { label('確かめられなかったこと'); para(note.gaps); }
+    if (note.sources && note.sources.length) {
+      label('出典');
+      var sl = document.createElement('p');
+      sl.className = 'filter-help';
+      sl.style.marginTop = '8px';
+      note.sources.forEach(function (u, n) {
+        if (n) sl.appendChild(document.createTextNode(' / '));
+        sl.appendChild(sourceLink(u, String(n + 1)));
+      });
+      box.appendChild(sl);
+    }
+    var conf = document.createElement('p');
+    conf.className = 'filter-help';
+    conf.style.marginTop = '10px';
+    conf.textContent = '確度: ' + ({ high: '高(一次資料で確認)', medium: '中(資料が薄い箇所あり)', low: '低(資料が乏しい)' }[note.confidence] || note.confidence);
+    box.appendChild(conf);
+    host.appendChild(box);
+  }
+
+  function sourceLink(url, text) {
+    var a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = text || '出典';
+    return a;
+  }
+
   function renderSet() {
     var set = state.sets[state.i];
     if (!set) { show('list'); return; }
@@ -1227,6 +1387,8 @@
       p.textContent = x;
       meta.appendChild(p);
     });
+
+    renderGenreNote(set);
 
     var vw = $('variant-wrap');
     vw.innerHTML = '';
@@ -1486,7 +1648,8 @@
   $('btn-back-list').addEventListener('click', backToList);
   $('filter-genre').addEventListener('change', function () { filters.genre = this.value; renderList(); });
   $('filter-vocal').addEventListener('change', function () { filters.vocal = this.value; renderList(); });
-  $('btn-clear-filters').addEventListener('click', function () { filters = { genre: 'all', vocal: 'all' }; renderList(); });
+  $('btn-clear-filters').addEventListener('click', function () { filters = { genre: 'all', vocal: 'all', query: '' }; $('filter-text').value = ''; renderList(); });
+  $('filter-text').addEventListener('input', function () { filters.query = this.value.trim(); renderList(); });
   $('btn-reset').addEventListener('click', function () {
     if (!window.confirm('読み込み済みの全セット・判定・メモ・コピー済み状態を削除します。元のMDファイルは変更しません。必要な記録は先に保存してください。リセットしますか？')) return;
     try {
@@ -1662,10 +1825,11 @@
     });
   }
   function authorMatches() {
-    var query = authorUI.query.toLocaleLowerCase();
+    var query = authorUI.query;
     return authors.filter(function (p) {
       var languageOK = authorUI.language === 'all' || (authorUI.language === 'multi' ? p.language === 'multi' : p.languages.indexOf(authorUI.language) >= 0);
-      return languageOK && (!query || (p.name + ' ' + p.summary + ' ' + p.personality).toLocaleLowerCase().indexOf(query) >= 0);
+      return languageOK && matchesAllTerms(
+        [p.name, p.summary, p.personality, p.reference, p.reference2, p.reference3].filter(Boolean).join(' '), query);
     });
   }
   function importAuthors(text) {
@@ -1879,6 +2043,7 @@
 
   /* ------------------------- 起動 ------------------------- */
   load();
+  loadGenreNotes();
   if (state.sets.length) { renderList(); show('list'); } else { show('load'); }
 })();
 </script>
