@@ -638,6 +638,9 @@
       <button class="file-btn btn" id="btn-pick-folder" style="margin-top:8px">フォルダごと読み込む</button>
       <input type="file" id="folder-input" webkitdirectory multiple>
       <p id="folder-help" style="margin-top:8px">サブフォルダを含む .md / .markdown から、Style・Exclude・歌詞欄のいずれかがあるファイルを追加します。読み込み済みと内容・生成条件が同じセットは追加しません。</p>
+      <button class="file-btn btn" id="btn-pick-notes" style="margin-top:8px">ジャンル解説(genres.json)を読み込む</button>
+      <input type="file" id="notes-input" accept=".json,application/json">
+      <p id="notes-help" style="margin-top:8px">ジャンル解説はページに含めていません。手元の genres.json を1回読み込むと、この端末に保存されて曲ごとに解説が出ます。フォルダごと読み込んだときも、中の genres.json と作詞家JSONを見分けて取り込みます。</p>
       <div class="row" style="flex-wrap:wrap;margin-top:12px">
         <button class="btn small" id="btn-list" hidden>読み込み済みの一覧へ</button>
         <button class="btn small" id="btn-reset">読み込みデータをリセット</button>
@@ -1014,7 +1017,8 @@
   ];
   var VOCAL_LABELS = { instrumental: 'インスト', vocal: '歌もの', unknown: '未分類' };
 
-  // ジャンル解説は**ページに埋め込まず外部データ**にする(index.html と同じ場所の genres.json)。
+  // ジャンル解説は**ページにも公開リポジトリにも置かない**。利用者が手元の genres.json を選んで
+  // 読み込み、この端末(IndexedDB。localStorage は作詞家データで埋まりうるので使わない)に保存する。
   // 無ければ解説を出さないだけで、それ以外は従来どおり動く。
   var genreNotes = null;
   function genreNoteOf(set) {
@@ -1025,16 +1029,36 @@
     var f = genreNotes && (genreNotes.families || []).filter(function (x) { return x.id === id; })[0];
     return f ? f.ja : id;
   }
+  var NOTES_DB = 'suno_pad_genre_notes', NOTES_KEY = 'genres';
+  function notesStore(mode, fn) {
+    return new Promise(function (resolve, reject) {
+      if (!window.indexedDB) { reject(new Error('この端末では保存できません。')); return; }
+      var req = indexedDB.open(NOTES_DB, 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore('kv'); };
+      req.onerror = function () { reject(req.error); };
+      req.onsuccess = function () {
+        var db = req.result, tx = db.transaction('kv', mode), r = fn(tx.objectStore('kv'));
+        tx.oncomplete = function () { db.close(); resolve(r && r.result); };
+        tx.onerror = tx.onabort = function () { db.close(); reject(tx.error); };
+      };
+    });
+  }
+  function isGenreNotes(json) { return !!(json && json.kind === 'suno-genre-notes' && json.genres && typeof json.genres === 'object'); }
+  function applyGenreNotes(json) {
+    genreNotes = json;
+    if (state.sets.length) renderList();
+  }
+  function saveGenreNotes(json) {
+    if (!isGenreNotes(json)) throw new Error('ジャンル解説のJSONではありません。genres.json を選んでください。');
+    return notesStore('readwrite', function (st) { st.put(json, NOTES_KEY); }).then(function () {
+      applyGenreNotes(json);
+      return Object.keys(json.genres).length;
+    });
+  }
   function loadGenreNotes() {
-    if (typeof fetch !== 'function') return;
-    fetch('genres.json', { cache: 'no-cache' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (json) {
-        if (!json || json.kind !== 'suno-genre-notes' || !json.genres) return;
-        genreNotes = json;
-        if (state.sets.length) renderList();
-      })
-      .catch(function () { /* 置いていないときは解説なしで動く */ });
+    notesStore('readonly', function (st) { return st.get(NOTES_KEY); })
+      .then(function (json) { if (isGenreNotes(json)) applyGenreNotes(json); })
+      .catch(function () { /* 未保存・保存不可のときは解説なしで動く */ });
   }
 
   // set を渡せるときは、そのセットが名乗っているジャンルidを優先する。
@@ -1583,13 +1607,15 @@
     var mode = ev.target.id === 'folder-input' ? 'フォルダ' : 'ファイル';
     var epoch = ++importEpoch;
     var files = selected.filter(function (f) { return /\.(md|markdown)$/i.test(f.name); });
+    var jsons = selected.filter(function (f) { return /\.json$/i.test(f.name); });
     files.sort(function (a, b) {
       return (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name, 'ja');
     });
     var collected = [];
     var collectedAuthors = [];
     var usable = 0;
-    var skipped = selected.length - files.length;
+    var skipped = selected.length - files.length - jsons.length;
+    var extra = [];
     var failed = 0;
     setImporting(true);
     importStatus('選択された ' + selected.length + ' 件のうち、MD ' + files.length + ' 件を確認します。');
@@ -1617,10 +1643,22 @@
         if (epoch !== importEpoch) return;
         importProgress(mode, i + 1, files.length, false);
       }
+      // JSON はジャンル解説と作詞家データだけを中身(kind)で見分けて取り込む。
+      for (var j = 0; j < jsons.length; j++) {
+        if (epoch !== importEpoch) return;
+        try {
+          var text = await readFile(jsons[j], function () {});
+          var json = JSON.parse(text);
+          if (isGenreNotes(json)) extra.push('ジャンル解説' + await saveGenreNotes(json) + '件を保存');
+          else if (json && json.kind === 'suno-lyricist-personas') { importAuthors(text); extra.push('作詞家JSONを作詞家モードへ読み込み'); }
+          else skipped++;
+        } catch (e) { failed++; }
+      }
       $('import-title').textContent = '重複を確認して一覧に反映中';
       await yieldToDisplay();
       if (epoch !== importEpoch) return;
       var result = collected.length ? addSets(collected, 'MD') : '追加できるMDはありませんでした';
+      if (extra.length) result += '・' + extra.join('・');
       if (collectedAuthors.length) {
         importAuthors(JSON.stringify({kind:'suno-lyricist-personas',version:1,items:collectedAuthors}));
         show('authors');
@@ -1638,6 +1676,17 @@
   $('btn-pick-files').addEventListener('click', function () { $('file-input').click(); });
   $('btn-pick-folder').addEventListener('click', function () { $('folder-input').click(); });
   $('file-input').addEventListener('change', importFiles);
+  $('btn-pick-notes').addEventListener('click', function () { $('notes-input').click(); });
+  $('notes-input').addEventListener('change', function (ev) {
+    var file = (ev.target.files || [])[0];
+    ev.target.value = '';
+    if (!file) return;
+    importStatus('ジャンル解説を読み込み中…');
+    readFile(file, function () {})
+      .then(function (text) { return saveGenreNotes(JSON.parse(text)); })
+      .then(function (n) { importStatus('ジャンル解説 ' + n + ' 件をこの端末に保存しました。'); })
+      .catch(function (e) { importStatus('ジャンル解説を読み込めませんでした：' + (e && e.message || e)); });
+  });
   $('folder-input').addEventListener('change', importFiles);
   if (!('webkitdirectory' in $('folder-input'))) {
     $('btn-pick-folder').hidden = true;
