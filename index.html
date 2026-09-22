@@ -911,19 +911,57 @@
   }
 
   /* ------------------------- 保存 ------------------------- */
+  // 読み込んだセットは IndexedDB に置く(ジャンル解説と同じ保存先)。以前は localStorage だったが、
+  // iPhone の Safari は localStorage が1サイトあたり約5MB(日本語は1字2バイトで数える)で、
+  // 全ジャンル588本(約200万字)と作詞家データ(約80万字)で溢れ、保存の失敗が黙って捨てられていた
+  // (読み込んだ直後は見えても、開き直すと消える)。判定・メモ・コピー済み(state.rec)は小さいので localStorage のまま。
+  var SETS_KEY = 'sets';
+  var savedSets = [];        // 保存先から読んだ(または最後に保存した)セット
+  var setsReady = false;     // 起動時の読み出しが終わったか
   function save() {
-    try {
-      if (!state.sample) localStorage.setItem(LS_SETS, JSON.stringify(state.sets));
-      localStorage.setItem(LS_REC, JSON.stringify(state.rec));
-    } catch (e) { /* プライベートモード等 — 保存できなくても動く */ }
+    try { localStorage.setItem(LS_REC, JSON.stringify(state.rec)); }
+    catch (e) { importStatus('判定・メモをこの端末に保存できませんでした(' + (e && e.name || e) + ')。「記録」から書き出して控えを取ってください。'); }
+  }
+  function saveSets() {
+    if (state.sample) return Promise.resolve();
+    var snapshot = state.sets.slice();
+    return notesStore('readwrite', function (st) { st.put(snapshot, SETS_KEY); })
+      .then(function () {
+        savedSets = snapshot;
+        try { localStorage.removeItem(LS_SETS); } catch (e) { /* 旧形式の掃除だけ */ }
+        return true;
+      })
+      .catch(function (e) {
+        importStatus('読み込んだセットをこの端末に保存できませんでした(' + (e && (e.name || e.message) || e) + ')。'
+          + '開き直すと消えます。端末の空き容量を確かめるか、読み込むフォルダを小分けにしてください。');
+        return false;
+      });
   }
   function load() {
+    state.sets = savedSets.slice();
     try {
-      var s = localStorage.getItem(LS_SETS);
-      if (s) state.sets = JSON.parse(s) || [];
       var r = localStorage.getItem(LS_REC);
       if (r) state.rec = JSON.parse(r) || {};
-    } catch (e) { state.sets = []; state.rec = {}; }
+    } catch (e) { state.rec = {}; }
+  }
+  // 起動時に一度だけ。旧形式(localStorage)に残っているセットは IndexedDB へ移して localStorage を空ける。
+  function loadStoredSets() {
+    function legacy() {
+      try { var s = localStorage.getItem(LS_SETS); return s ? (JSON.parse(s) || []) : null; } catch (e) { return null; }
+    }
+    return notesStore('readonly', function (st) { return st.get(SETS_KEY); })
+      .then(function (v) {
+        if (Array.isArray(v)) { savedSets = v; return; }
+        var old = legacy();
+        if (old && old.length) {
+          savedSets = old;
+          return notesStore('readwrite', function (st) { st.put(old, SETS_KEY); })
+            .then(function () { try { localStorage.removeItem(LS_SETS); } catch (e) { /* */ } })
+            .catch(function () { /* 移せなければ旧形式のまま使う */ });
+        }
+      })
+      .catch(function () { var old = legacy(); if (old) savedSets = old; })
+      .then(function () { setsReady = true; });
   }
 
   function recOf(set) {
@@ -1538,6 +1576,7 @@
 
   function addSets(newSets, label) {
     if (!importing) $('import-progress').hidden = true;
+    if (!setsReady) { importStatus('保存済みのセットを読み出しています。少し待ってからもう一度お試しください。'); return ''; }
     if (!newSets.length) { importStatus(label + ': 使用できる3欄が見つかりません'); return ''; }
     // サンプル閲覧中は保存してある実データに追加する。
     if (state.sample) { state.sets = []; state.rec = {}; load(); state.sample = false; }
@@ -1566,6 +1605,7 @@
       countContent(key, 1);
     });
     save();
+    saveSets();
     renderList();
     show('list');
     var message = added + ' セット追加・' + updated + ' セット更新・重複 ' + duplicates + ' セットをスキップ';
@@ -1713,6 +1753,8 @@
     try {
       localStorage.removeItem(LS_SETS);
       localStorage.removeItem(LS_REC);
+      savedSets = [];
+      notesStore('readwrite', function (st) { st.delete(SETS_KEY); }).catch(function () { /* 無ければよい */ });
     } catch (e) {
       importStatus('保存データを削除できませんでした。ブラウザの保存設定を確認して、もう一度リセットしてください。');
       return;
@@ -2100,9 +2142,12 @@
 
 
   /* ------------------------- 起動 ------------------------- */
-  load();
   loadGenreNotes();
-  if (state.sets.length) { renderList(); show('list'); } else { show('load'); }
+  loadStoredSets().then(function () {
+    if (state.sample) return; // 読み出しの間にサンプルを開いた
+    load();
+    if (state.sets.length) { renderList(); show('list'); } else { show('load'); }
+  });
 })();
 </script>
 </body>
