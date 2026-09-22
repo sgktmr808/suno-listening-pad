@@ -637,7 +637,7 @@
       <input type="file" id="file-input" accept=".md,.markdown,text/markdown" multiple>
       <button class="file-btn btn" id="btn-pick-folder" style="margin-top:8px">フォルダごと読み込む</button>
       <input type="file" id="folder-input" webkitdirectory multiple>
-      <p id="folder-help" style="margin-top:8px">サブフォルダを含む .md / .markdown から、Style・Exclude・歌詞欄のいずれかがあるファイルを追加します。読み込み済みと内容・生成条件が同じセットは追加しません。</p>
+      <p id="folder-help" style="margin-top:8px">サブフォルダを含む .md / .markdown から、Style・Exclude・歌詞欄のいずれかがあるファイルを追加します。読み込み済みと内容・生成条件が同じセットは追加しません。iPhone では一度に選ぶフォルダを100本程度までにしてください（SUNO フォルダ全体ではなく、束のフォルダや「_p01」などの小分けフォルダを選ぶ）。</p>
       <button class="file-btn btn" id="btn-pick-notes" style="margin-top:8px">ジャンル解説(genres.json)を読み込む</button>
       <input type="file" id="notes-input" accept=".json,application/json">
       <p id="notes-help" style="margin-top:8px">ジャンル解説はページに含めていません。手元の genres.json を1回読み込むと、この端末に保存されて曲ごとに解説が出ます。フォルダごと読み込んだときも、中の genres.json と作詞家JSONを見分けて取り込みます。</p>
@@ -1600,11 +1600,19 @@
     });
   }
 
+  var LARGE_FOLDER_HINT = 'iPhone ではファイル数の多いフォルダや、端末にまだダウンロードされていない iCloud のファイルを渡せないことがあります。'
+    + 'SUNO フォルダ全体ではなく束のフォルダ（100本を超える束は「_p01」などの小分けフォルダ）を選ぶか、'
+    + 'ファイルアプリでフォルダを長押しして「ダウンロード」してから選び直してください。';
   async function importFiles(ev) {
     var selected = Array.prototype.slice.call(ev.target.files || []);
     ev.target.value = '';
-    if (!selected.length || importing) return;
+    if (importing) return;
     var mode = ev.target.id === 'folder-input' ? 'フォルダ' : 'ファイル';
+    if (!selected.length) {
+      // iPhone はファイル数の多いフォルダや、端末にまだ無い iCloud のファイルを1件も渡さないことがある。
+      if (mode === 'フォルダ') importStatus('フォルダから1件も受け取れませんでした。' + LARGE_FOLDER_HINT);
+      return;
+    }
     var epoch = ++importEpoch;
     var files = selected.filter(function (f) { return /\.(md|markdown)$/i.test(f.name); });
     var jsons = selected.filter(function (f) { return /\.json$/i.test(f.name); });
@@ -1665,7 +1673,8 @@
         result += '・作詞家' + collectedAuthors.length + '件を作詞家モードへ読み込み';
       }
       importProgress(mode, files.length, files.length, true);
-      importStatus(mode + 'の読み込み完了：' + result + '（使用できるMD ' + usable + ' 件・対象外 ' + skipped + ' 件・読み込み失敗 ' + failed + ' 件）');
+      importStatus(mode + 'の読み込み完了：' + result + '（使用できるMD ' + usable + ' 件・対象外 ' + skipped + ' 件・読み込み失敗 ' + failed + ' 件）'
+        + (failed ? '。' + LARGE_FOLDER_HINT : ''));
     } catch (e) {
       if (epoch === importEpoch) importStatus('読み込みを完了できませんでした。ファイルを選び直して再度お試しください。');
     } finally {
